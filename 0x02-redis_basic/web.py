@@ -1,46 +1,59 @@
-import requests
+#!/usr/bin/env python3
+"""
+This module contains a function that returns the HTML content of a particular
+URL and stores it in a Redis cache
+"""
 import redis
+import requests
+from typing import Optional, Callable
 from functools import wraps
 
-# Initialize a Redis connection
-redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 
-def cache_request_result(url):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            # Use the URL as the cache key
-            cache_key = f"cache:{url}"
-            cached_result = redis_client.get(cache_key)
+def count_url_calls(fn: Callable) -> Callable:
+    """
+    Wrapper function that counts how many times a URL is called
 
-            if cached_result:
-                return cached_result.decode('utf-8')
+    Args:
+        fn (Callable): function to wrap
 
-            result = func(*args, **kwargs)
-            # Cache the result with a 10-second expiration time
-            redis_client.setex(cache_key, 10, result)
-            return result
+    Returns:
+        Callable: wrapped function
+    """
+    @wraps(fn)
+    def increment_url_count(*args, **kwargs):
+        """
+        Increment calls of method
+        """
+        r: redis.Redis = redis.Redis()
+        url: str = ''
+        if args:
+            url = args[0]
+        if kwargs:
+            url = kwargs["url"] if "url" in kwargs else url
+        r.incr("count:{}".format(url))
+        return fn(*args, **kwargs)
+    return increment_url_count
 
-        return wrapper
 
-    return decorator
-
-@cache_request_result
+@count_url_calls
 def get_page(url: str) -> str:
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.text
-    return None
+    """
+    Returns the HTML content of the URL
 
-# Example usage
-if __name__ == "__main__":
-    slow_url = "http://slowwly.robertomurray.co.uk/delay/1000/url/http://www.example.com"
-    
-    # Access the slow URL twice to see caching in action
-    for _ in range(2):
-        page = get_page(slow_url)
-        if page:
-            print(page)
-        else:
-            print("Failed to retrieve the page.")
+    Args:
+        url (str): URL to request
 
+    Returns:
+        str: HTML content of the URL
+    """
+    r: redis.Redis = redis.Redis()
+
+    page_cache: Optional[bytes] = r.get(url)
+    html_content: Optional[str] = ''
+    if page_cache:
+        html_content = page_cache.decode('utf-8')
+    else:
+        html_content = requests.get(url).text
+        r.setex(url, 10, html_content)
+
+    return html_content
