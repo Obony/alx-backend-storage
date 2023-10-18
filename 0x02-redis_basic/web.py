@@ -1,54 +1,46 @@
-#!/usr/bin/env python3
-"""In this tasks, we will implement a get_page function
-(prototype: def get_page(url: str) -> str:). The core of
-the function is very simple. It uses the requests module
-to obtain the HTML content of a particular URL and returns it.
-
-Start in a new file named web.py and do not reuse the code
-written in exercise.py.
-
-Inside get_page track how many times a particular URL was
-accessed in the key "count:{url}" and cache the result with
-an expiration time of 10 seconds.
-
-Tip: Use http://slowwly.robertomurray.co.uk to simulate
-a slow response and test your caching."""
-
-
-import redis
 import requests
+import redis
 from functools import wraps
 
-r = redis.Redis()
+# Initialize a Redis connection
+redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 
+def cache_request_result(url):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Use the URL as the cache key
+            cache_key = f"cache:{url}"
+            cached_result = redis_client.get(cache_key)
 
-def url_access_count(method):
-    """decorator for get_page function"""
-    @wraps(method)
-    def wrapper(url):
-        """wrapper function"""
-        key = "cached:" + url
-        cached_value = r.get(key)
-        if cached_value:
-            return cached_value.decode("utf-8")
+            if cached_result:
+                return cached_result.decode('utf-8')
 
-            # Get new content and update cache
-        key_count = "count:" + url
-        html_content = method(url)
+            result = func(*args, **kwargs)
+            # Cache the result with a 10-second expiration time
+            redis_client.setex(cache_key, 10, result)
+            return result
 
-        r.incr(key_count)
-        r.set(key, html_content, ex=10)
-        r.expire(key, 10)
-        return html_content
-    return wrapper
+        return wrapper
 
+    return decorator
 
-@url_access_count
+@cache_request_result
 def get_page(url: str) -> str:
-    """obtain the HTML content of a particular"""
-    results = requests.get(url)
-    return results.text
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.text
+    return None
 
-
+# Example usage
 if __name__ == "__main__":
-    get_page('http://slowwly.robertomurray.co.uk')
+    slow_url = "http://slowwly.robertomurray.co.uk/delay/1000/url/http://www.example.com"
+    
+    # Access the slow URL twice to see caching in action
+    for _ in range(2):
+        page = get_page(slow_url)
+        if page:
+            print(page)
+        else:
+            print("Failed to retrieve the page.")
+
